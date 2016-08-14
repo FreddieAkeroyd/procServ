@@ -81,6 +81,8 @@ int    logFileFD=-1;             // FD for log file
 int    logPort;                  // Port no. for logger connections
 int    debugFD=-1;               // FD for debug output
 
+static int save_tm_yday;          // current day, used for potential daily log rotation
+
 #define MAX_CONNECTIONS 64
 
 // mLoop runs the program
@@ -643,11 +645,17 @@ void SendToAll(const char * message,
     int len = 0;
     time_t now;
     struct tm now_tm;
+    static bool log_stamp_sent = false;
 
     time(&now);
     localtime_r(&now, &now_tm);
     strftime(stamp, sizeof(stamp)-1, stampFormat, &now_tm);
     len = strlen(stamp);
+
+    if (now_tm.tm_yday != save_tm_yday) {
+        openLogFile();  // reopen log file on day change to allow for log file rotation
+        log_stamp_sent = false;
+    }
 
     // Log the traffic to file / stdout (debug)
     if (sender==NULL || sender->isProcess())
@@ -656,7 +664,6 @@ void SendToAll(const char * message,
             if (stampLog) {
                 // Some OSs (Windows) do not support line buffering, so we can get parts of lines,
                 // hence need to track of when to send timestamp
-                static bool log_stamp_sent = false;
                 int i = 0, j = 0;
                 for (i = 0; i < count; ++i) {
                     if (!log_stamp_sent) {
@@ -879,17 +886,29 @@ int checkCommandFile(const char * command)
 
 void openLogFile()
 {
+    char logFileName[1024];
+    time_t now;
+    struct tm now_tm;
     if (-1 != logFileFD) {
         close(logFileFD);
     }
+    time(&now);
+    localtime_r(&now, &now_tm);
+    save_tm_yday = now_tm.tm_yday;
     if (logFile) {
-        logFileFD = open(logFile, O_CREAT|O_WRONLY|O_APPEND, S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
+        // allow use of %d etc. in logfile name for log file rotation
+        if (0 == strftime(logFileName, sizeof(logFileName)-1, logFile, &now_tm))
+        {
+            strncpy(logFileName, logFile, sizeof(logFileName)-1);
+        }
+        logFileName[sizeof(logFileName)-1] = '\0';
+        logFileFD = open(logFileName, O_CREAT|O_WRONLY|O_APPEND, S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
         if (-1 == logFileFD) {         // Don't stop here - just go without
             fprintf(stderr,
                     "%s: unable to open log file %s\n",
-                    procservName, logFile);
+                    procservName, logFileName);
         } else {
-            PRINTF("Opened file %s for logging\n", logFile);
+            PRINTF("Opened file %s for logging\n", logFileName);
         }
     }
 }
